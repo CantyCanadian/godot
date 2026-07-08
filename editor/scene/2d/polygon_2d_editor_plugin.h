@@ -82,7 +82,6 @@ class Polygon2DEditor : public AbstractPolygon2DEditor {
 		ACTION_ADD_POLYGON,
 		ACTION_REMOVE_POLYGON,
 		ACTION_PAINT_WEIGHT,
-		ACTION_CLEAR_WEIGHT,
 		ACTION_SET_WEIGHT,
 		ACTION_MAX,
 	};
@@ -126,6 +125,7 @@ class Polygon2DEditor : public AbstractPolygon2DEditor {
 	VBoxContainer *bone_scroll_vb = nullptr;
 	Button *sync_bones = nullptr;
 	bool bone_painting = false;
+	bool bone_painting_clear = false;
 	int bone_painting_bone = 0;
 	Vector<float> prev_weights;
 	Vector<float> bone_paint_stroke_extremes;
@@ -199,7 +199,7 @@ class Polygon2DEditor : public AbstractPolygon2DEditor {
 	void _select_mode(int p_mode);
 	void _select_paint_mode(int p_mode);
 	void _bone_paint_selected(int p_index);
-	void _paint_bone_weight();
+	void _paint_bone_weight(bool p_clear);
 
 	int _get_polygon_count() const override;
 

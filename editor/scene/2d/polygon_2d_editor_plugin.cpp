@@ -133,8 +133,7 @@ void Polygon2DEditor::_notification(int p_what) {
 			action_buttons[ACTION_SCALE]->set_button_icon(get_editor_theme_icon(SNAME("ToolScale")));
 			action_buttons[ACTION_ADD_POLYGON]->set_button_icon(get_editor_theme_icon(SNAME("Edit")));
 			action_buttons[ACTION_REMOVE_POLYGON]->set_button_icon(get_editor_theme_icon(SNAME("Close")));
-			action_buttons[ACTION_PAINT_WEIGHT]->set_button_icon(get_editor_theme_icon(SNAME("Add")));
-			action_buttons[ACTION_CLEAR_WEIGHT]->set_button_icon(get_editor_theme_icon(SNAME("Close")));
+			action_buttons[ACTION_PAINT_WEIGHT]->set_button_icon(get_editor_theme_icon(SNAME("EditAddRemove")));
 			action_buttons[ACTION_SET_WEIGHT]->set_button_icon(get_editor_theme_icon(SNAME("Paint")));
 
 			vscroll->set_anchors_and_offsets_preset(PRESET_RIGHT_WIDE);
@@ -260,14 +259,14 @@ void Polygon2DEditor::_bone_paint_selected(int p_index) {
 	canvas->queue_redraw();
 }
 
-void Polygon2DEditor::_paint_bone_weight() {
+void Polygon2DEditor::_paint_bone_weight(bool p_clear) {
 	Vector<float> painted_weights = node->get_bone_weights(bone_painting_bone);
 
 	int pc = painted_weights.size();
 	real_t amount = bone_paint_strength->get_value();
 	real_t radius = bone_paint_radius->get_value() * EDSCALE;
 
-	if (selected_action == ACTION_CLEAR_WEIGHT) {
+	if (p_clear) {
 		amount = -amount;
 	}
 
@@ -285,7 +284,7 @@ void Polygon2DEditor::_paint_bone_weight() {
 		real_t inner_radius = bone_paint_inner_radius->get_value() * EDSCALE;
 		float pinch = bone_paint_pinch->get_value();
 		float bubble = bone_paint_bubble->get_value();
-		bool track_min = selected_action == ACTION_CLEAR_WEIGHT;
+		bool track_min = p_clear;
 
 		float *extremes = bone_paint_stroke_extremes.ptrw();
 
@@ -377,7 +376,6 @@ void Polygon2DEditor::_select_mode(int p_mode) {
 		} break;
 		case MODE_BONES: {
 			action_buttons[ACTION_PAINT_WEIGHT]->show();
-			action_buttons[ACTION_CLEAR_WEIGHT]->show();
 			action_buttons[ACTION_SET_WEIGHT]->show();
 			_set_action(ACTION_PAINT_WEIGHT);
 
@@ -845,7 +843,7 @@ void Polygon2DEditor::_canvas_input(const Ref<InputEvent> &p_input) {
 					}
 				}
 
-				if (current_action == ACTION_PAINT_WEIGHT || current_action == ACTION_CLEAR_WEIGHT || current_action == ACTION_SET_WEIGHT) {
+				if (current_action == ACTION_PAINT_WEIGHT || current_action == ACTION_SET_WEIGHT) {
 					int bone_selected = -1;
 					for (int i = 0; i < bone_scroll_vb->get_child_count(); i++) {
 						CheckBox *c = Object::cast_to<CheckBox>(bone_scroll_vb->get_child(i));
@@ -859,6 +857,7 @@ void Polygon2DEditor::_canvas_input(const Ref<InputEvent> &p_input) {
 						prev_weights = node->get_bone_weights(bone_selected);
 						bone_painting = true;
 						bone_painting_bone = bone_selected;
+						bone_painting_clear = false;
 
 						if (current_paint_mode == PAINT_MODE_SOFT && current_action == ACTION_SET_WEIGHT) {
 							bone_paint_stroke_extremes.resize(prev_weights.size());
@@ -868,7 +867,7 @@ void Polygon2DEditor::_canvas_input(const Ref<InputEvent> &p_input) {
 						}
 
 						bone_paint_pos = mb->get_position();
-						_paint_bone_weight();
+						_paint_bone_weight(bone_painting_clear);
 						canvas->queue_redraw();
 					}
 				}
@@ -904,16 +903,66 @@ void Polygon2DEditor::_canvas_input(const Ref<InputEvent> &p_input) {
 					undo_redo->add_undo_method(node, "set_bone_weights", bone_painting_bone, prev_weights);
 					undo_redo->commit_action();
 					bone_painting = false;
+					bone_painting_clear = false;
 				}
 			}
-		} else if (mb->get_button_index() == MouseButton::RIGHT && mb->is_pressed()) {
-			_cancel_editing();
+		} else if (mb->get_button_index() == MouseButton::RIGHT) {
+			if (mb->is_pressed()) {
+				if (selected_action == ACTION_PAINT_WEIGHT) {
+					// Right-click paints with the strength removed instead of added.
+					drag_from = snap_point(mb->get_position());
+					is_dragging = true;
+					if (current_mode == MODE_UV) {
+						editing_points = node->get_uv();
+					} else {
+						editing_points = node->get_polygon();
+					}
 
-			if (bone_painting) {
-				node->set_bone_weights(bone_painting_bone, prev_weights);
+					current_action = ACTION_PAINT_WEIGHT;
+
+					int bone_selected = -1;
+					for (int i = 0; i < bone_scroll_vb->get_child_count(); i++) {
+						CheckBox *c = Object::cast_to<CheckBox>(bone_scroll_vb->get_child(i));
+						if (c && c->is_pressed()) {
+							bone_selected = i;
+							break;
+						}
+					}
+
+					if (bone_selected != -1 && node->get_bone_weights(bone_selected).size() == editing_points.size()) {
+						prev_weights = node->get_bone_weights(bone_selected);
+						bone_painting = true;
+						bone_painting_bone = bone_selected;
+						bone_painting_clear = true;
+						bone_paint_stroke_extremes = prev_weights.duplicate();
+
+						bone_paint_pos = mb->get_position();
+						_paint_bone_weight(bone_painting_clear);
+						canvas->queue_redraw();
+					}
+				} else {
+					_cancel_editing();
+
+					if (bone_painting) {
+						node->set_bone_weights(bone_painting_bone, prev_weights);
+						bone_painting = false;
+					}
+
+					canvas->queue_redraw();
+				}
+			} else if (is_dragging) {
+				is_dragging = false;
+
+				if (bone_painting) {
+					undo_redo->create_action(TTR("Paint Bone Weights"));
+					undo_redo->add_do_method(node, "set_bone_weights", bone_painting_bone, node->get_bone_weights(bone_painting_bone));
+					undo_redo->add_undo_method(node, "set_bone_weights", bone_painting_bone, prev_weights);
+					undo_redo->commit_action();
+					bone_painting = false;
+				}
+
+				bone_painting_clear = false;
 			}
-
-			canvas->queue_redraw();
 		}
 	}
 
@@ -1040,7 +1089,6 @@ void Polygon2DEditor::_canvas_input(const Ref<InputEvent> &p_input) {
 					}
 				} break;
 				case ACTION_PAINT_WEIGHT:
-				case ACTION_CLEAR_WEIGHT:
 				case ACTION_SET_WEIGHT: {
 					bone_paint_pos = mm->get_position();
 				} break;
@@ -1049,7 +1097,7 @@ void Polygon2DEditor::_canvas_input(const Ref<InputEvent> &p_input) {
 			}
 
 			if (bone_painting) {
-				_paint_bone_weight();
+				_paint_bone_weight(bone_painting_clear);
 			}
 
 			canvas->queue_redraw();
@@ -1057,7 +1105,7 @@ void Polygon2DEditor::_canvas_input(const Ref<InputEvent> &p_input) {
 		} else if (polygon_create.size()) {
 			create_to = mtx.affine_inverse().xform(mm->get_position());
 			canvas->queue_redraw();
-		} else if (selected_action == ACTION_PAINT_WEIGHT || selected_action == ACTION_CLEAR_WEIGHT || selected_action == ACTION_SET_WEIGHT) {
+		} else if (selected_action == ACTION_PAINT_WEIGHT || selected_action == ACTION_SET_WEIGHT) {
 			bone_paint_pos = mm->get_position();
 			canvas->queue_redraw();
 		}
@@ -1394,7 +1442,7 @@ void Polygon2DEditor::_canvas_draw() {
 		}
 	}
 
-	if (selected_action == ACTION_PAINT_WEIGHT || selected_action == ACTION_CLEAR_WEIGHT || selected_action == ACTION_SET_WEIGHT) {
+	if (selected_action == ACTION_PAINT_WEIGHT || selected_action == ACTION_SET_WEIGHT) {
 		NodePath bone_path;
 		for (int i = 0; i < bone_scroll_vb->get_child_count(); i++) {
 			CheckBox *c = Object::cast_to<CheckBox>(bone_scroll_vb->get_child(i));
@@ -1555,8 +1603,7 @@ Polygon2DEditor::Polygon2DEditor() {
 	action_buttons[ACTION_SCALE]->set_tooltip_text(TTR("Scale Polygon"));
 	action_buttons[ACTION_ADD_POLYGON]->set_tooltip_text(TTR("Create a custom polygon. Enables custom polygon rendering."));
 	action_buttons[ACTION_REMOVE_POLYGON]->set_tooltip_text(TTR("Remove a custom polygon. If none remain, custom polygon rendering is disabled."));
-	action_buttons[ACTION_PAINT_WEIGHT]->set_tooltip_text(TTR("Paint weights with specified intensity."));
-	action_buttons[ACTION_CLEAR_WEIGHT]->set_tooltip_text(TTR("Unpaint weights with specified intensity."));
+	action_buttons[ACTION_PAINT_WEIGHT]->set_tooltip_text(TTR("Paint and unpaints weights with specified intensity."));
 	action_buttons[ACTION_SET_WEIGHT]->set_tooltip_text(TTR("Set weights to specified intensity."));
 
 	action_buttons[ACTION_CREATE]->set_accessibility_name(TTRC("Create Polygon"));
@@ -1568,8 +1615,7 @@ Polygon2DEditor::Polygon2DEditor() {
 	action_buttons[ACTION_SCALE]->set_accessibility_name(TTRC("Scale Polygon"));
 	action_buttons[ACTION_ADD_POLYGON]->set_accessibility_name(TTRC("Create a custom polygon. Enables custom polygon rendering."));
 	action_buttons[ACTION_REMOVE_POLYGON]->set_accessibility_name(TTRC("Remove a custom polygon. If none remain, custom polygon rendering is disabled."));
-	action_buttons[ACTION_PAINT_WEIGHT]->set_accessibility_name(TTRC("Paint weights with specified intensity."));
-	action_buttons[ACTION_CLEAR_WEIGHT]->set_accessibility_name(TTRC("Unpaint weights with specified intensity."));
+	action_buttons[ACTION_PAINT_WEIGHT]->set_accessibility_name(TTRC("Paint and unpaints weights with specified intensity."));
 	action_buttons[ACTION_SET_WEIGHT]->set_accessibility_name(TTRC("Set weights to specified intensity."));
 
 	paint_toolbar = memnew(HBoxContainer);
