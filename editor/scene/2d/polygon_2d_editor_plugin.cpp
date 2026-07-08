@@ -327,6 +327,11 @@ void Polygon2DEditor::_paint_bone_weight(bool p_clear) {
 	node->set_bone_weights(bone_painting_bone, painted_weights);
 }
 
+void Polygon2DEditor::_toggle_show_weights() {
+	EditorSettings::get_singleton()->set_project_metadata("polygon_2d_uv_editor", "show_weights", show_weights_toggle->is_pressed());
+	canvas->queue_redraw();
+}
+
 void Polygon2DEditor::_select_mode(int p_mode) {
 	current_mode = Mode(p_mode);
 	mode_buttons[current_mode]->set_pressed(true);
@@ -1406,10 +1411,37 @@ void Polygon2DEditor::_canvas_draw() {
 	}
 
 	if (weight_r) {
+		bool show_weight_labels = show_weights_toggle->is_pressed();
+		Ref<Font> weight_label_font = get_theme_font(SceneStringName(font), SNAME("Label"));
+		int weight_label_font_size = get_theme_font_size(SceneStringName(font_size), SNAME("Label"));
+
 		for (int i = 0; i < uvs.size(); i++) {
 			Vector2 draw_pos = mtx.xform(uvs[i]);
 			float weight = weight_r[i];
-			canvas->draw_rect(Rect2(draw_pos - Vector2(2, 2) * EDSCALE, Vector2(5, 5) * EDSCALE), Color(weight, weight, weight, 1.0), Math::round(EDSCALE));
+
+			static const Color stops[5] = {
+				Color(0, 0, 1, 1), // 0.01 blue
+				Color(0, 1, 1, 1), // 0.25 cyan
+				Color(0, 1, 0, 1), // 0.50 green
+				Color(1, 1, 0, 1), // 0.75 yellow
+				Color(1, 0, 0, 1), // 1.00 red
+			};
+
+			// If exactly 0, shows as black.
+			Color result = Color(0, 0, 0, 1);
+			if (weight > 0.0f) {
+				float t = CLAMP(weight, 0.0f, 1.0f) * 4.0f;
+				int idx = CLAMP(int(t), 0, 3);
+				result = stops[idx].lerp(stops[idx + 1], t - idx);
+			}
+			canvas->draw_rect(Rect2(draw_pos - Vector2(2, 2) * EDSCALE, Vector2(5, 5) * EDSCALE), result, Math::round(EDSCALE));
+
+			if (show_weight_labels && weight > 0.0f) {
+				String text = String::num(weight, 2);
+				Vector2 text_size = weight_label_font->get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, weight_label_font_size);
+				Vector2 text_pos = draw_pos + Vector2(-text_size.x / 2.0f, -4 * EDSCALE - weight_label_font->get_descent(weight_label_font_size));
+				canvas->draw_string(weight_label_font, text_pos, text, HORIZONTAL_ALIGNMENT_LEFT, -1, weight_label_font_size, Color(1, 1, 1));
+			}
 		}
 	} else {
 		Vector2 texture_size_half = handle->get_size() * 0.5;
@@ -1744,6 +1776,13 @@ Polygon2DEditor::Polygon2DEditor() {
 	bone_paint_bubble->set_value(0);
 	bone_paint_bubble->set_accessibility_name(TTRC("Bubble:"));
 	bone_paint_bubble->set_tooltip_text(TTR("Additive bulge halfway in the brush's radius. Doesn't affect brush borders. Positive inflates the curve, negative deflates the curve."));
+
+	show_weights_toggle = memnew(CheckBox);
+	paint_toolbar->add_child(show_weights_toggle);
+	show_weights_toggle->set_text(TTRC("Show Weights"));
+	show_weights_toggle->set_accessibility_name(TTRC("Show Weights:"));
+	show_weights_toggle->set_pressed_no_signal(EditorSettings::get_singleton()->get_project_metadata("polygon_2d_uv_editor", "show_weights", true));
+	show_weights_toggle->connect(SceneStringName(toggled), callable_mp(this, &Polygon2DEditor::_toggle_show_weights).unbind(1));
 
 	grid_settings = memnew(AcceptDialog);
 	grid_settings->set_title(TTR("Configure Grid:"));

@@ -35,6 +35,7 @@
 
 class AcceptDialog;
 class ButtonGroup;
+class CheckBox;
 class EditorDock;
 class EditorZoomWidget;
 class HScrollBar;
@@ -145,9 +146,11 @@ class Polygon2DEditor : public AbstractPolygon2DEditor {
 	SpinBox *bone_paint_pinch = nullptr;
 	Label *bone_paint_bubble_label = nullptr;
 	SpinBox *bone_paint_bubble = nullptr;
+	CheckBox *show_weights_toggle = nullptr;
 
 	void _sync_bones();
 	void _update_bone_list(const Polygon2D *p_for_node);
+	void _toggle_show_weights();
 
 	Vector<Vector2> editing_points;
 	Vector<Vector2> previous_uv;
