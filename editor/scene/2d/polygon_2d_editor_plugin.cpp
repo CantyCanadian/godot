@@ -49,6 +49,7 @@
 #include "scene/gui/dialogs.h"
 #include "scene/gui/label.h"
 #include "scene/gui/menu_button.h"
+#include "scene/gui/option_button.h"
 #include "scene/gui/panel.h"
 #include "scene/gui/scroll_container.h"
 #include "scene/gui/separator.h"
@@ -267,6 +268,7 @@ void Polygon2DEditor::_select_mode(int p_mode) {
 	for (int i = 0; i < ACTION_MAX; i++) {
 		action_buttons[i]->hide();
 	}
+	polygon_action_button->hide();
 	bone_scroll_main_vb->hide();
 	bone_paint_strength->hide();
 	bone_paint_radius->hide();
@@ -291,6 +293,8 @@ void Polygon2DEditor::_select_mode(int p_mode) {
 			action_buttons[ACTION_ADD_POLYGON]->show();
 			action_buttons[ACTION_REMOVE_POLYGON]->show();
 			_set_action(ACTION_ADD_POLYGON);
+
+			polygon_action_button->show();
 		} break;
 		case MODE_UV: {
 			if (node->get_uv().size() != node->get_polygon().size()) {
@@ -452,6 +456,51 @@ void Polygon2DEditor::_set_action(int p_action) {
 		action_buttons[i]->set_pressed(p_action == i);
 	}
 	canvas->queue_redraw();
+}
+
+void Polygon2DEditor::_set_polygon_action(int p_action) {
+	current_polygon_action = PolygonAction(p_action);
+	canvas->queue_redraw();
+}
+
+void Polygon2DEditor::_add_custom_polygon(const Vector<int> &p_polygon) {
+	if (p_polygon.size() < 3) {
+		error->set_text(TTR("Invalid Polygon (need 3 different vertices)"));
+		error->popup_centered();
+		return;
+	}
+
+	Array polygons = node->get_polygons();
+
+	for (int i = 0; i < polygons.size(); i++) {
+		Vector<int> existing = polygons[i];
+		if (existing.size() != p_polygon.size()) {
+			continue;
+		}
+
+		bool same = true;
+		for (int j = 0; j < existing.size(); j++) {
+			if (!p_polygon.has(existing[j])) {
+				same = false;
+				break;
+			}
+		}
+
+		if (same) {
+			error->set_text(TTR("Custom Polygon already exists."));
+			error->popup_centered();
+			return;
+		}
+	}
+
+	polygons = polygons.duplicate(); //copy because its a reference
+	polygons.push_back(p_polygon);
+
+	EditorUndoRedoManager *undo_redo = EditorUndoRedoManager::get_singleton();
+	undo_redo->create_action(TTR("Add Custom Polygon"));
+	undo_redo->add_do_method(node, "set_polygons", polygons);
+	undo_redo->add_undo_method(node, "set_polygons", node->get_polygons());
+	undo_redo->commit_action();
 }
 
 void Polygon2DEditor::_canvas_input(const Ref<InputEvent> &p_input) {
@@ -677,27 +726,25 @@ void Polygon2DEditor::_canvas_input(const Ref<InputEvent> &p_input) {
 					}
 
 					if (closest != -1) {
-						if (polygon_create.size() && closest == polygon_create[0]) {
-							//close
-							if (polygon_create.size() < 3) {
-								error->set_text(TTR("Invalid Polygon (need 3 different vertices)"));
-								error->popup_centered();
-							} else {
-								Array polygons = node->get_polygons();
-								polygons = polygons.duplicate(); //copy because its a reference
-
-								//todo, could check whether it already exists?
-								polygons.push_back(polygon_create);
-								undo_redo->create_action(TTR("Add Custom Polygon"));
-								undo_redo->add_do_method(node, "set_polygons", polygons);
-								undo_redo->add_undo_method(node, "set_polygons", node->get_polygons());
-								undo_redo->commit_action();
+						if (current_polygon_action == POLYGON_ACTION_POLYGON) {
+							if (polygon_create.size() && closest == polygon_create[0]) {
+								//close
+								_add_custom_polygon(polygon_create);
+								polygon_create.clear();
+							} else if (!polygon_create.has(closest)) {
+								//add temporarily if not exists
+								polygon_create.push_back(closest);
 							}
-
-							polygon_create.clear();
 						} else if (!polygon_create.has(closest)) {
 							//add temporarily if not exists
 							polygon_create.push_back(closest);
+
+							if (polygon_create.size() >= 3) {
+								_add_custom_polygon(polygon_create);
+								//strip drops the oldest vertex so the next triangle reuses the last two
+								//radial drops the middle vertex so it keeps vertex 0 and the last vertex
+								polygon_create.remove_at(current_polygon_action == POLYGON_ACTION_STRIP ? 0 : 1);
+							}
 						}
 					}
 				}
@@ -1414,6 +1461,16 @@ Polygon2DEditor::Polygon2DEditor() {
 	action_buttons[ACTION_REMOVE_POLYGON]->set_accessibility_name(TTRC("Remove a custom polygon. If none remain, custom polygon rendering is disabled."));
 	action_buttons[ACTION_PAINT_WEIGHT]->set_accessibility_name(TTRC("Paint weights with specified intensity."));
 	action_buttons[ACTION_CLEAR_WEIGHT]->set_accessibility_name(TTRC("Unpaint weights with specified intensity."));
+
+	polygon_action_button = memnew(OptionButton);
+	toolbar->add_child(polygon_action_button);
+	polygon_action_button->add_item(TTR("Polygon"), POLYGON_ACTION_POLYGON);
+	polygon_action_button->add_item(TTR("Strip"), POLYGON_ACTION_STRIP);
+	polygon_action_button->add_item(TTR("Radial"), POLYGON_ACTION_RADIAL);
+	polygon_action_button->select(POLYGON_ACTION_POLYGON);
+	polygon_action_button->set_focus_mode(FOCUS_ACCESSIBILITY);
+	polygon_action_button->connect(SceneStringName(item_selected), callable_mp(this, &Polygon2DEditor::_set_polygon_action));
+	current_polygon_action = POLYGON_ACTION_POLYGON;
 
 	bone_paint_strength = memnew(HSlider);
 	toolbar->add_child(bone_paint_strength);

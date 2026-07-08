@@ -41,6 +41,7 @@ class HScrollBar;
 class HSlider;
 class Label;
 class MenuButton;
+class OptionButton;
 class Panel;
 class ScrollContainer;
 class SpinBox;
@@ -81,11 +82,18 @@ class Polygon2DEditor : public AbstractPolygon2DEditor {
 		ACTION_MAX
 	};
 
+	enum PolygonAction {
+		POLYGON_ACTION_POLYGON,
+		POLYGON_ACTION_STRIP,
+		POLYGON_ACTION_RADIAL
+	};
+
 	Polygon2D *node = nullptr;
 	Polygon2D *previous_node = nullptr;
 
 	EditorDock *polygon_edit = nullptr;
 	Mode current_mode = MODE_MAX; // Uninitialized.
+	PolygonAction current_polygon_action = POLYGON_ACTION_POLYGON; // Uninitialized.
 	Button *mode_buttons[MODE_MAX];
 	Action selected_action = ACTION_CREATE;
 	Button *action_buttons[ACTION_MAX];
@@ -106,6 +114,8 @@ class Polygon2DEditor : public AbstractPolygon2DEditor {
 	void _zoom_callback(float p_zoom_factor, Vector2 p_origin, Ref<InputEvent> p_event);
 	Vector2 draw_offset;
 	real_t draw_zoom = 1.0;
+
+	OptionButton *polygon_action_button = nullptr;
 
 	VBoxContainer *bone_scroll_main_vb = nullptr;
 	ScrollContainer *bone_scroll = nullptr;
@@ -169,6 +179,8 @@ class Polygon2DEditor : public AbstractPolygon2DEditor {
 
 	void _select_mode(int p_mode);
 	void _bone_paint_selected(int p_index);
+	void _set_polygon_action(int p_action);
+	void _add_custom_polygon(const Vector<int> &p_polygon);
 
 	int _get_polygon_count() const override;
 
