@@ -312,7 +312,7 @@ void Polygon2DEditor::_paint_bone_weight(bool p_clear) {
 			// so passing through and back out doesn't erase the peak.
 			float candidate = CLAMP(set ? Math::lerp(r[i], (float)amount, falloff) : r[i] + amount * falloff, 0.0f, 1.0f);
 			extremes[i] = track_min ? MIN(extremes[i], candidate) : MAX(extremes[i], candidate);
-			w[i] = extremes[i];
+			w[i] = Math::snapped(extremes[i], 0.01f);
 		}
 	} else {
 		for (int i = 0; i < pc; i++) {
@@ -320,7 +320,7 @@ void Polygon2DEditor::_paint_bone_weight(bool p_clear) {
 				continue;
 			}
 
-			w[i] = CLAMP(set ? amount : r[i] + amount, 0, 1);
+			w[i] = Math::snapped(CLAMP(set ? amount : r[i] + amount, 0, 1), 0.01f);
 		}
 	}
 
