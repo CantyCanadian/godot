@@ -327,6 +327,232 @@ void Polygon2DEditor::_paint_bone_weight(bool p_clear) {
 	node->set_bone_weights(bone_painting_bone, painted_weights);
 }
 
+// Normalize and rounds weights to the nearest hundredth.
+Vector<float> Polygon2DEditor::_round_weights(const Vector<double> &p_weights) const {
+	int n = p_weights.size();
+	Vector<float> result;
+	result.resize(n);
+
+	double sum = 0.0;
+	for (int i = 0; i < n; i++) {
+		sum += p_weights[i];
+	}
+	if (sum <= 0.0) {
+		for (int i = 0; i < n; i++) {
+			result.write[i] = 0.0f;
+		}
+		return result;
+	}
+
+	Vector<int> hundredths;
+	Vector<double> remainders;
+	hundredths.resize(n);
+	remainders.resize(n);
+
+	int hundredths_sum = 0;
+	for (int i = 0; i < n; i++) {
+		double scaled = p_weights[i] / sum * 100.0;
+		int fl = (int)Math::floor(scaled);
+		hundredths.write[i] = fl;
+		remainders.write[i] = scaled - fl;
+		hundredths_sum += fl;
+	}
+
+	int remaining = 100 - hundredths_sum;
+	Vector<bool> got_extra;
+	got_extra.resize(n);
+	for (int i = 0; i < n; i++) {
+		got_extra.write[i] = false;
+	}
+	for (int r = 0; r < remaining; r++) {
+		int best = -1;
+		double best_remainder = -1.0;
+		for (int i = 0; i < n; i++) {
+			if (got_extra[i]) {
+				continue;
+			}
+			if (remainders[i] > best_remainder) {
+				best_remainder = remainders[i];
+				best = i;
+			}
+		}
+		if (best == -1) {
+			break;
+		}
+		got_extra.write[best] = true;
+	}
+
+	for (int i = 0; i < n; i++) {
+		int h = hundredths[i] + (got_extra[i] ? 1 : 0);
+		result.write[i] = h / 100.0f;
+	}
+	return result;
+}
+
+void Polygon2DEditor::_normalize_weights() {
+	int bone_count = node->get_bone_count();
+	if (bone_count == 0) {
+		return;
+	}
+
+	int vertex_count = node->get_polygon().size();
+	if (vertex_count == 0) {
+		return;
+	}
+
+	Vector<Vector<float>> old_weights;
+	Vector<Vector<float>> new_weights;
+	old_weights.resize(bone_count);
+	new_weights.resize(bone_count);
+	for (int b = 0; b < bone_count; b++) {
+		old_weights.write[b] = node->get_bone_weights(b);
+		new_weights.write[b] = old_weights[b].duplicate();
+	}
+
+	Vector<double> vertex_weights;
+	vertex_weights.resize(bone_count);
+	for (int v = 0; v < vertex_count; v++) {
+		double sum = 0.0;
+		for (int b = 0; b < bone_count; b++) {
+			double w = (v < old_weights[b].size()) ? old_weights[b][v] : 0.0;
+			vertex_weights.write[b] = w;
+			sum += w;
+		}
+		if (sum <= 0.0) {
+			continue;
+		}
+
+		Vector<float> rounded = _round_weights(vertex_weights);
+		for (int b = 0; b < bone_count; b++) {
+			new_weights.write[b].write[v] = rounded[b];
+		}
+	}
+
+	EditorUndoRedoManager *undo_redo = EditorUndoRedoManager::get_singleton();
+	undo_redo->create_action(TTR("Normalize Weights"));
+	for (int b = 0; b < bone_count; b++) {
+		undo_redo->add_do_method(node, "set_bone_weights", b, new_weights[b]);
+		undo_redo->add_undo_method(node, "set_bone_weights", b, old_weights[b]);
+	}
+	undo_redo->commit_action();
+}
+
+void Polygon2DEditor::_smooth_weights() {
+	int bone_count = node->get_bone_count();
+	if (bone_count == 0) {
+		return;
+	}
+
+	Vector<Vector2> points = node->get_polygon();
+	int vertex_count = points.size();
+	if (vertex_count == 0) {
+		return;
+	}
+
+	// Build the neighbor graph in the same way the editor does.
+	Vector<Vector<int>> neighbors;
+	neighbors.resize(vertex_count);
+
+	int outline_count = vertex_count - node->get_internal_vertex_count();
+	if (outline_count < 0) {
+		outline_count = 0;
+	}
+
+	auto add_edge = [&](int p_a, int p_b) {
+		if (p_a == p_b || p_a < 0 || p_a >= vertex_count || p_b < 0 || p_b >= vertex_count) {
+			return;
+		}
+		if (!neighbors[p_a].has(p_b)) {
+			neighbors.write[p_a].push_back(p_b);
+		}
+		if (!neighbors[p_b].has(p_a)) {
+			neighbors.write[p_b].push_back(p_a);
+		}
+	};
+
+	for (int i = 0; i < outline_count; i++) {
+		add_edge(i, (i + 1) % outline_count);
+	}
+
+	Array polygons = node->get_polygons();
+	for (int p = 0; p < polygons.size(); p++) {
+		Vector<int> poly = polygons[p];
+		int ps = poly.size();
+		for (int j = 0; j < ps; j++) {
+			add_edge(poly[j], poly[(j + 1) % ps]);
+		}
+	}
+
+	Vector<Vector<float>> old_weights;
+	Vector<Vector<float>> new_weights;
+	old_weights.resize(bone_count);
+	new_weights.resize(bone_count);
+	for (int b = 0; b < bone_count; b++) {
+		old_weights.write[b] = node->get_bone_weights(b);
+		new_weights.write[b] = old_weights[b].duplicate();
+	}
+
+	// Distance-weighted Laplacian smoothing.
+	const double min_distance = 0.001;
+
+	Vector<double> raw_weights;
+	raw_weights.resize(bone_count);
+
+	for (int v = 0; v < vertex_count; v++) {
+		const Vector<int> &vn = neighbors[v];
+		if (vn.is_empty()) {
+			continue;
+		}
+
+		double self_weight = 1.0;
+		double neighbor_weight_sum = 0.0;
+		Vector<double> neighbor_weights;
+		neighbor_weights.resize(vn.size());
+		for (int k = 0; k < vn.size(); k++) {
+			double dist = MAX(points[v].distance_to(points[vn[k]]), min_distance);
+			double w = 1.0 / dist;
+			neighbor_weights.write[k] = w;
+			neighbor_weight_sum += w;
+		}
+		double total_weight = self_weight + neighbor_weight_sum;
+
+		for (int b = 0; b < bone_count; b++) {
+			double v_w = (v < old_weights[b].size()) ? old_weights[b][v] : 0.0;
+			double acc = v_w * self_weight;
+			for (int k = 0; k < vn.size(); k++) {
+				int n = vn[k];
+				double n_w = (n < old_weights[b].size()) ? old_weights[b][n] : 0.0;
+				acc += n_w * neighbor_weights[k];
+			}
+			raw_weights.write[b] = acc / total_weight;
+		}
+
+		Vector<float> rounded = _round_weights(raw_weights);
+		for (int b = 0; b < bone_count; b++) {
+			new_weights.write[b].write[v] = rounded[b];
+		}
+	}
+
+	EditorUndoRedoManager *undo_redo = EditorUndoRedoManager::get_singleton();
+	undo_redo->create_action(TTR("Smooth Weights"));
+	for (int b = 0; b < bone_count; b++) {
+		undo_redo->add_do_method(node, "set_bone_weights", b, new_weights[b]);
+		undo_redo->add_undo_method(node, "set_bone_weights", b, old_weights[b]);
+	}
+	undo_redo->commit_action();
+}
+
+void Polygon2DEditor::_weight_menu_option(int p_option) {
+	switch (p_option) {
+		case WEIGHT_NORMALIZE: {
+			_normalize_weights();
+		} break;
+		case WEIGHT_SMOOTH: {
+			_smooth_weights();
+		} break;
+	}
+}
+
 void Polygon2DEditor::_toggle_show_weights() {
 	EditorSettings::get_singleton()->set_project_metadata("polygon_2d_uv_editor", "show_weights", show_weights_toggle->is_pressed());
 	canvas->queue_redraw();
@@ -1776,6 +2002,17 @@ Polygon2DEditor::Polygon2DEditor() {
 	bone_paint_bubble->set_value(0);
 	bone_paint_bubble->set_accessibility_name(TTRC("Bubble:"));
 	bone_paint_bubble->set_tooltip_text(TTR("Additive bulge halfway in the brush's radius. Doesn't affect brush borders. Positive inflates the curve, negative deflates the curve."));
+
+	weight_menu = memnew(MenuButton);
+	paint_toolbar->add_child(weight_menu);
+	weight_menu->set_flat(false);
+	weight_menu->set_theme_type_variation("FlatMenuButton");
+	weight_menu->set_text(TTR("Weight"));
+	weight_menu->get_popup()->add_item(TTR("Normalize"), WEIGHT_NORMALIZE);
+	weight_menu->get_popup()->set_item_tooltip(WEIGHT_NORMALIZE, TTR("Normalizes the weights of every bone on every vertex so they add up to 1."));
+	weight_menu->get_popup()->add_item(TTR("Smooth"), WEIGHT_SMOOTH);
+	weight_menu->get_popup()->set_item_tooltip(WEIGHT_SMOOTH, TTR("Smooths the weights of every bone by averaging each vertex with its immediate neighbors."));
+	weight_menu->get_popup()->connect(SceneStringName(id_pressed), callable_mp(this, &Polygon2DEditor::_weight_menu_option));
 
 	show_weights_toggle = memnew(CheckBox);
 	paint_toolbar->add_child(show_weights_toggle);

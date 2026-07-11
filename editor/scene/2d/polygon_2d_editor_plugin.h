@@ -64,6 +64,11 @@ class Polygon2DEditor : public AbstractPolygon2DEditor {
 		GRID_SETTINGS,
 	};
 
+	enum {
+		WEIGHT_NORMALIZE,
+		WEIGHT_SMOOTH,
+	};
+
 	enum Mode {
 		MODE_POINTS,
 		MODE_POLYGONS,
@@ -146,10 +151,14 @@ class Polygon2DEditor : public AbstractPolygon2DEditor {
 	SpinBox *bone_paint_pinch = nullptr;
 	Label *bone_paint_bubble_label = nullptr;
 	SpinBox *bone_paint_bubble = nullptr;
+	MenuButton *weight_menu = nullptr;
 	CheckBox *show_weights_toggle = nullptr;
 
 	void _sync_bones();
 	void _update_bone_list(const Polygon2D *p_for_node);
+	Vector<float> _round_weights(const Vector<double> &p_weights) const;
+	void _normalize_weights();
+	void _smooth_weights();
 	void _toggle_show_weights();
 
 	Vector<Vector2> editing_points;
@@ -178,6 +187,7 @@ class Polygon2DEditor : public AbstractPolygon2DEditor {
 
 	void _edit_menu_option(int p_option);
 	void _grid_menu_option(int p_option);
+	void _weight_menu_option(int p_option);
 
 	void _cancel_editing();
 	void _update_polygon_editing_state();
